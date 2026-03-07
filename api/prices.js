@@ -353,23 +353,19 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'Falta parametro: ?name=marca+producto o ?estilo=ABC123' });
   }
 
-  // Extract brand and keywords from name for validation
-  const nameParts = searchName ? searchName.toLowerCase().split(/\s+/) : [];
-  const brand = nameParts[0] || '';
-  // Get significant keywords (3+ chars, not the brand repeated)
-  const keywords = nameParts.filter(w => w.length >= 3 && w !== brand);
+  // Extract brand from name for validation
+  const brand = searchName ? searchName.toLowerCase().split(/\s+/)[0] : '';
 
   // Validate that a result actually matches the product we're looking for
-  function isRelevant(result) {
+  function isRelevant(result, wasEstiloSearch) {
     if (!result || !result.name) return true;
     const resultName = result.name.toLowerCase();
-    // Result must contain the brand name
-    if (brand && brand.length > 2 && !resultName.includes(brand)) return false;
-    // Result must contain at least one keyword from the description
-    if (keywords.length > 0) {
-      const hasKeyword = keywords.some(kw => resultName.includes(kw));
-      if (!hasKeyword) return false;
-    }
+    // If found by estilo and result contains the brand, trust it
+    if (wasEstiloSearch && brand && resultName.includes(brand)) return true;
+    // If found by estilo but wrong brand, reject
+    if (wasEstiloSearch && brand && brand.length > 2 && !resultName.includes(brand)) return false;
+    // If found by name search, must contain the brand
+    if (!wasEstiloSearch && brand && brand.length > 2 && !resultName.includes(brand)) return false;
     return true;
   }
 
@@ -378,11 +374,11 @@ module.exports = async function handler(req, res) {
     try {
       if (estiloQ) {
         const result = await searchFn(estiloQ);
-        if (result && result.price > 0 && !result.error && isRelevant(result)) return result;
+        if (result && result.price > 0 && !result.error && isRelevant(result, true)) return result;
       }
       if (nameQ && nameQ !== estiloQ) {
         const result = await searchFn(nameQ);
-        if (result && result.price > 0 && !result.error && isRelevant(result)) return result;
+        if (result && result.price > 0 && !result.error && isRelevant(result, false)) return result;
       }
       return null;
     } catch (e) {
