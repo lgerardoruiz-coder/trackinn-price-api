@@ -330,20 +330,27 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'Falta parametro: ?name=marca+producto o ?estilo=ABC123' });
   }
 
-  // General stores search by product name (brand + description)
-  // Brand stores (Nike) can try estilo first
-  const generalQuery = searchName || searchEstilo;
-  const nikeQuery = searchEstilo || searchName;
+  // All stores search by estilo first, fallback to name
+  async function searchWithFallback(searchFn, estilo, name) {
+    if (estilo) {
+      const result = await searchFn(estilo);
+      if (result && result.price > 0 && !result.error) return result;
+    }
+    if (name && name !== estilo) {
+      return await searchFn(name);
+    }
+    return null;
+  }
 
-  // Search all stores in parallel
+  // Search all stores in parallel — estilo first, then name as fallback
   const results = await Promise.allSettled([
-    searchMarti(generalQuery),
-    searchPalacio(generalQuery),
-    searchNike(nikeQuery),
-    searchLiverpool(generalQuery),
-    searchAmazon(generalQuery),
-    searchAdidas(generalQuery),
-    searchDeportenis(generalQuery)
+    searchWithFallback(searchMarti, searchEstilo, searchName),
+    searchWithFallback(searchPalacio, searchEstilo, searchName),
+    searchWithFallback(searchNike, searchEstilo, searchName),
+    searchWithFallback(searchLiverpool, searchEstilo, searchName),
+    searchWithFallback(searchAmazon, searchEstilo, searchName),
+    searchWithFallback(searchAdidas, searchEstilo, searchName),
+    searchWithFallback(searchDeportenis, searchEstilo, searchName)
   ]);
 
   const prices = results
