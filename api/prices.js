@@ -331,15 +331,20 @@ module.exports = async function handler(req, res) {
   }
 
   // All stores search by estilo first, fallback to name
-  async function searchWithFallback(searchFn, estilo, name) {
-    if (estilo) {
-      const result = await searchFn(estilo);
-      if (result && result.price > 0 && !result.error) return result;
+  async function searchWithFallback(searchFn, estiloQ, nameQ) {
+    try {
+      if (estiloQ) {
+        const result = await searchFn(estiloQ);
+        if (result && result.price > 0 && !result.error) return result;
+      }
+      if (nameQ && nameQ !== estiloQ) {
+        const result = await searchFn(nameQ);
+        if (result && result.price > 0 && !result.error) return result;
+      }
+      return null;
+    } catch (e) {
+      return null;
     }
-    if (name && name !== estilo) {
-      return await searchFn(name);
-    }
-    return null;
   }
 
   // Search all stores in parallel — estilo first, then name as fallback
