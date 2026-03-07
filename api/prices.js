@@ -2,30 +2,53 @@ const cheerio = require('cheerio');
 
 // ============ STORE SEARCHERS ============
 
-// 1. MARTI — VTEX public API (no key needed)
+// 1. MARTI — VTEX Intelligent Search API (shows real sale prices)
 async function searchMarti(query) {
   try {
-    const url = `https://www.marti.mx/api/catalog_system/pub/products/search?ft=${encodeURIComponent(query)}&_from=0&_to=4`;
+    const url = `https://www.marti.mx/api/io/_v/api/intelligent-search/product_search/${encodeURIComponent(query)}?page=1&count=3&locale=es-MX`;
     const res = await fetch(url, {
       headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
     });
     if (!res.ok) return null;
     const data = await res.json();
-    if (!data || !data.length) return null;
+    if (!data.products || !data.products.length) return null;
 
-    const product = data[0];
-    const sku = product.items && product.items[0];
-    const seller = sku && sku.sellers && sku.sellers[0];
-    const price = seller && seller.commertialOffer && seller.commertialOffer.Price;
-    const listPrice = seller && seller.commertialOffer && seller.commertialOffer.ListPrice;
+    const product = data.products[0];
+
+    // Find the lowest available price across all SKUs
+    let lowestPrice = Infinity;
+    let highestList = 0;
+    if (product.items) {
+      for (const item of product.items) {
+        if (!item.sellers) continue;
+        for (const seller of item.sellers) {
+          const offer = seller.commertialOffer;
+          if (!offer || offer.Price <= 0) continue;
+          if (offer.Price < lowestPrice) lowestPrice = offer.Price;
+          if (offer.ListPrice > highestList) highestList = offer.ListPrice;
+        }
+      }
+    }
+
+    // Fallback to priceRange if no SKU prices
+    if (lowestPrice === Infinity && product.priceRange) {
+      lowestPrice = product.priceRange.sellingPrice.lowPrice || 0;
+      highestList = product.priceRange.listPrice.highPrice || 0;
+    }
+
+    if (lowestPrice === Infinity || lowestPrice <= 0) return null;
+
+    const link = product.link || product.linkText || '';
+    const productUrl = link.startsWith('http') ? link : `https://www.marti.mx${link}/p`;
+    const image = product.items && product.items[0] && product.items[0].images && product.items[0].images[0] && product.items[0].images[0].imageUrl || '';
 
     return {
       store: 'Marti',
       name: product.productName || '',
-      price: price || 0,
-      listPrice: listPrice || 0,
-      url: product.link || `https://www.marti.mx/${product.linkText}/p`,
-      image: product.items && product.items[0] && product.items[0].images && product.items[0].images[0] && product.items[0].images[0].imageUrl || ''
+      price: lowestPrice,
+      listPrice: highestList || lowestPrice,
+      url: productUrl,
+      image: image
     };
   } catch (e) {
     return { store: 'Marti', error: e.message };
