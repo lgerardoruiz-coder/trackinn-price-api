@@ -353,15 +353,23 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'Falta parametro: ?name=marca+producto o ?estilo=ABC123' });
   }
 
-  // Extract brand from name for validation (first word)
-  const brand = searchName ? searchName.split(' ')[0].toLowerCase() : '';
+  // Extract brand and keywords from name for validation
+  const nameParts = searchName ? searchName.toLowerCase().split(/\s+/) : [];
+  const brand = nameParts[0] || '';
+  // Get significant keywords (3+ chars, not the brand repeated)
+  const keywords = nameParts.filter(w => w.length >= 3 && w !== brand);
 
   // Validate that a result actually matches the product we're looking for
   function isRelevant(result) {
-    if (!result || !result.name || !brand) return true; // can't validate, accept it
+    if (!result || !result.name) return true;
     const resultName = result.name.toLowerCase();
     // Result must contain the brand name
     if (brand && brand.length > 2 && !resultName.includes(brand)) return false;
+    // Result must contain at least one keyword from the description
+    if (keywords.length > 0) {
+      const hasKeyword = keywords.some(kw => resultName.includes(kw));
+      if (!hasKeyword) return false;
+    }
     return true;
   }
 
