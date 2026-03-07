@@ -374,7 +374,15 @@ module.exports = async function handler(req, res) {
     try {
       if (estiloQ) {
         const result = await searchFn(estiloQ);
-        if (result && result.price > 0 && !result.error && isRelevant(result, true)) return result;
+        if (result && result.price > 0 && !result.error) {
+          // Validate: result name must contain the estilo code (exact match)
+          const rName = (result.name || '').toLowerCase();
+          const estiloClean = estiloQ.replace(/\s/g, '').toLowerCase();
+          const estiloBase = estiloQ.split('-')[0].toLowerCase().trim();
+          if (rName.includes(estiloClean) || rName.includes(estiloQ.toLowerCase()) || rName.includes(estiloBase)) {
+            return result;
+          }
+        }
       }
       if (nameQ && nameQ !== estiloQ) {
         const result = await searchFn(nameQ);
