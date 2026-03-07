@@ -319,22 +319,31 @@ module.exports = async function handler(req, res) {
     return res.status(200).end();
   }
 
-  const { q, estilo } = req.query;
-  const query = estilo || q;
+  const { q, estilo, name } = req.query;
+  // name = "NIKE TENIS AIR MAX 90", estilo = "DZ5361"
+  // For brand-specific stores (Nike, Adidas), estilo might work
+  // For general stores, use name (brand + description)
+  const searchName = name || q || '';
+  const searchEstilo = estilo || '';
 
-  if (!query) {
-    return res.status(400).json({ error: 'Falta parametro: ?q=nombre+producto o ?estilo=ABC123' });
+  if (!searchName && !searchEstilo) {
+    return res.status(400).json({ error: 'Falta parametro: ?name=marca+producto o ?estilo=ABC123' });
   }
+
+  // General stores search by product name (brand + description)
+  // Brand stores (Nike) can try estilo first
+  const generalQuery = searchName || searchEstilo;
+  const nikeQuery = searchEstilo || searchName;
 
   // Search all stores in parallel
   const results = await Promise.allSettled([
-    searchMarti(query),
-    searchPalacio(query),
-    searchNike(query),
-    searchLiverpool(query),
-    searchAmazon(query),
-    searchAdidas(query),
-    searchDeportenis(query)
+    searchMarti(generalQuery),
+    searchPalacio(generalQuery),
+    searchNike(nikeQuery),
+    searchLiverpool(generalQuery),
+    searchAmazon(generalQuery),
+    searchAdidas(generalQuery),
+    searchDeportenis(generalQuery)
   ]);
 
   const prices = results
@@ -344,7 +353,8 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
   return res.status(200).json({
-    query: query,
+    query: generalQuery,
+    estilo: searchEstilo,
     timestamp: new Date().toISOString(),
     results: prices
   });
