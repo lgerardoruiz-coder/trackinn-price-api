@@ -1,0 +1,11 @@
+{
+  "name": "trackinn-price-api",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0"
+  }
+}
