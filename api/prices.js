@@ -53,7 +53,7 @@ async function searchPalacio(query) {
       name: item.value || meta.product_name || '',
       price: meta.price || 0,
       listPrice: meta.listPrice || meta.price || 0,
-      url: meta.url ? `https://www.elpalaciodehierro.com${meta.url}` : '',
+      url: meta.url ? (meta.url.startsWith('http') ? meta.url : `https://www.elpalaciodehierro.com${meta.url}`) : '',
       image: meta.image_url || (meta.images && meta.images[0]) || ''
     };
   } catch (e) {
