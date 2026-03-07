@@ -353,16 +353,28 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: 'Falta parametro: ?name=marca+producto o ?estilo=ABC123' });
   }
 
+  // Extract brand from name for validation (first word)
+  const brand = searchName ? searchName.split(' ')[0].toLowerCase() : '';
+
+  // Validate that a result actually matches the product we're looking for
+  function isRelevant(result) {
+    if (!result || !result.name || !brand) return true; // can't validate, accept it
+    const resultName = result.name.toLowerCase();
+    // Result must contain the brand name
+    if (brand && brand.length > 2 && !resultName.includes(brand)) return false;
+    return true;
+  }
+
   // All stores search by estilo first, fallback to name
   async function searchWithFallback(searchFn, estiloQ, nameQ) {
     try {
       if (estiloQ) {
         const result = await searchFn(estiloQ);
-        if (result && result.price > 0 && !result.error) return result;
+        if (result && result.price > 0 && !result.error && isRelevant(result)) return result;
       }
       if (nameQ && nameQ !== estiloQ) {
         const result = await searchFn(nameQ);
-        if (result && result.price > 0 && !result.error) return result;
+        if (result && result.price > 0 && !result.error && isRelevant(result)) return result;
       }
       return null;
     } catch (e) {
