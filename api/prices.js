@@ -365,7 +365,7 @@ module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
   return res.status(200).json({
-    query: generalQuery,
+    query: searchName,
     estilo: searchEstilo,
     timestamp: new Date().toISOString(),
     results: prices
