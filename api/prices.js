@@ -356,16 +356,21 @@ module.exports = async function handler(req, res) {
   // Extract brand from name for validation
   const brand = searchName ? searchName.toLowerCase().split(/\s+/)[0] : '';
 
-  // Validate that a result actually matches the product we're looking for
-  function isRelevant(result, wasEstiloSearch) {
-    if (!result || !result.name) return true;
-    const resultName = result.name.toLowerCase();
-    // If found by estilo and result contains the brand, trust it
-    if (wasEstiloSearch && brand && resultName.includes(brand)) return true;
-    // If found by estilo but wrong brand, reject
-    if (wasEstiloSearch && brand && brand.length > 2 && !resultName.includes(brand)) return false;
-    // If found by name search, must contain the brand
-    if (!wasEstiloSearch && brand && brand.length > 2 && !resultName.includes(brand)) return false;
+  // Get significant words from search name for validation
+  const nameWords = searchName ? searchName.toLowerCase().split(/\s+/).filter(w => w.length >= 3) : [];
+
+  // Validate that a result matches by name (brand + at least one keyword)
+  function isRelevantByName(result) {
+    if (!result || !result.name || !nameWords.length) return true;
+    const rn = result.name.toLowerCase();
+    // Must contain brand
+    if (brand && brand.length > 2 && !rn.includes(brand)) return false;
+    // Must contain at least one other keyword besides brand
+    const otherWords = nameWords.filter(w => w !== brand);
+    if (otherWords.length > 0) {
+      const matchCount = otherWords.filter(w => rn.includes(w)).length;
+      if (matchCount === 0) return false;
+    }
     return true;
   }
 
@@ -386,7 +391,7 @@ module.exports = async function handler(req, res) {
       }
       if (nameQ && nameQ !== estiloQ) {
         const result = await searchFn(nameQ);
-        if (result && result.price > 0 && !result.error && isRelevant(result, false)) return result;
+        if (result && result.price > 0 && !result.error && isRelevantByName(result)) return result;
       }
       return null;
     } catch (e) {
