@@ -23,35 +23,26 @@ module.exports = async function handler(req, res) {
     if (nextDataMatch) {
       try {
         const nd = JSON.parse(nextDataMatch[1]);
-        const pp = nd.props && nd.props.pageProps;
-        const data = pp && pp.data;
-        const dataKeys = data ? Object.keys(data) : [];
-
-        // Explore data structure deeper
-        let dataInfo = {};
-        if (data) {
-          for (const key of dataKeys.slice(0, 10)) {
-            const val = data[key];
-            if (val && typeof val === 'object') {
-              dataInfo[key] = { type: Array.isArray(val) ? 'array(' + val.length + ')' : 'object', keys: Object.keys(val).slice(0, 10) };
-            } else {
-              dataInfo[key] = typeof val;
-            }
-          }
-        }
-
-        // Search for product data in the full JSON (look for price-related keywords)
         const fullStr = JSON.stringify(nd);
-        const priceMatches = (fullStr.match(/"(promoPrice|listPrice|salePrice|currentPrice)"/g) || []).slice(0, 5);
-        const titleMatches = (fullStr.match(/"title":"[^"]{5,50}"/g) || []).slice(0, 5);
+
+        // Find the path to products by looking for promoPrice context
+        // Extract a chunk around the first promoPrice to see the structure
+        const idx = fullStr.indexOf('"promoPrice"');
+        const chunk = idx >= 0 ? fullStr.substring(Math.max(0, idx - 500), idx + 200) : 'NOT_FOUND';
+
+        // Try to find records/products array
+        const recordsIdx = fullStr.indexOf('"records"');
+        const recordsChunk = recordsIdx >= 0 ? fullStr.substring(recordsIdx, recordsIdx + 200) : 'NOT_FOUND';
+
+        // Try body structure
+        const pp = nd.props && nd.props.pageProps;
+        const body = pp && pp.body;
+        const bodyType = body ? (typeof body === 'string' ? 'string(' + body.length + ')' : (Array.isArray(body) ? 'array(' + body.length + ')' : 'object:' + Object.keys(body).slice(0,5).join(','))) : 'null';
 
         firstTitle = JSON.stringify({
-          pagePropsKeys: pp ? Object.keys(pp) : [],
-          dataKeys,
-          dataInfo,
-          priceFieldsFound: priceMatches,
-          titleFieldsFound: titleMatches,
-          fullJsonLength: fullStr.length,
+          bodyType,
+          priceContext: chunk.substring(0, 500),
+          recordsContext: recordsChunk.substring(0, 300),
         });
       } catch (e) {
         firstTitle = 'PARSE_ERROR: ' + e.message;
