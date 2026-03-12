@@ -2,10 +2,49 @@ const cheerio = require('cheerio');
 
 // ============ STORE SEARCHERS ============
 
-// 1. MARTI — VTEX Intelligent Search API (shows real sale prices)
+// 1. DPORTENIS — HCL Commerce REST API (direct, no auth)
+async function searchDportenis(query) {
+  try {
+    const url = `https://www.dportenis.mx/search/resources/store/1/productview/bySearchTerm/${encodeURIComponent(query)}?pageSize=5`;
+    const res = await fetch(url, {
+      headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.catalogEntryView || !data.catalogEntryView.length) return null;
+
+    const p = data.catalogEntryView[0];
+    const priceObj = p.price || [];
+    let price = 0, listPrice = 0;
+    for (const pr of priceObj) {
+      if (pr.usage === 'Offer' || pr.description === 'I') price = parseFloat(pr.value) || 0;
+      if (pr.usage === 'Display' || pr.description === 'L') listPrice = parseFloat(pr.value) || 0;
+    }
+    if (!price && priceObj.length > 0) price = parseFloat(priceObj[0].value) || 0;
+    if (!listPrice) listPrice = price;
+
+    const thumb = p.thumbnail || '';
+    const image = thumb.startsWith('http') ? thumb : (thumb ? `https://www.dportenis.mx${thumb}` : '');
+    const seo = p.seo && p.seo.href ? p.seo.href : '';
+    const productUrl = seo ? `https://www.dportenis.mx${seo}` : '';
+
+    return {
+      store: 'Dportenis',
+      name: p.name || '',
+      price: price,
+      listPrice: listPrice,
+      url: productUrl,
+      image: image
+    };
+  } catch (e) {
+    return { store: 'Dportenis', error: e.message };
+  }
+}
+
+// 2. MARTI — VTEX Intelligent Search API
 async function searchMarti(query) {
   try {
-    const url = `https://www.marti.mx/api/io/_v/api/intelligent-search/product_search/${encodeURIComponent(query)}?page=1&count=3&locale=es-MX`;
+    const url = `https://www.marti.mx/api/io/_v/api/intelligent-search/product_search/${encodeURIComponent(query)}?page=1&count=5&locale=es-MX`;
     const res = await fetch(url, {
       headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
     });
@@ -14,10 +53,7 @@ async function searchMarti(query) {
     if (!data.products || !data.products.length) return null;
 
     const product = data.products[0];
-
-    // Find the lowest available price across all SKUs
-    let lowestPrice = Infinity;
-    let highestList = 0;
+    let lowestPrice = Infinity, highestList = 0;
     if (product.items) {
       for (const item of product.items) {
         if (!item.sellers) continue;
@@ -29,13 +65,10 @@ async function searchMarti(query) {
         }
       }
     }
-
-    // Fallback to priceRange if no SKU prices
     if (lowestPrice === Infinity && product.priceRange) {
       lowestPrice = product.priceRange.sellingPrice.lowPrice || 0;
       highestList = product.priceRange.listPrice.highPrice || 0;
     }
-
     if (lowestPrice === Infinity || lowestPrice <= 0) return null;
 
     const link = product.link || product.linkText || '';
@@ -43,7 +76,7 @@ async function searchMarti(query) {
     const image = product.items && product.items[0] && product.items[0].images && product.items[0].images[0] && product.items[0].images[0].imageUrl || '';
 
     return {
-      store: 'Marti',
+      store: 'Martí',
       name: product.productName || '',
       price: lowestPrice,
       listPrice: highestList || lowestPrice,
@@ -51,43 +84,92 @@ async function searchMarti(query) {
       image: image
     };
   } catch (e) {
-    return { store: 'Marti', error: e.message };
+    return { store: 'Martí', error: e.message };
   }
 }
 
-// 2. PALACIO DE HIERRO — Constructor.io
-async function searchPalacio(query) {
+// 3. LIVERPOOL — SSR scraping with __NEXT_DATA__ and JSON-LD fallback
+async function searchLiverpool(query) {
   try {
-    const url = `https://ac.cnstrc.com/search/${encodeURIComponent(query)}?key=key_5fTaaMhNEscECxIa&num_results_per_page=3&page=1`;
+    const url = `https://www.liverpool.com.mx/tienda/search?s=${encodeURIComponent(query)}`;
     const res = await fetch(url, {
-      headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'es-MX,es;q=0.9'
+      }
     });
     if (!res.ok) return null;
-    const data = await res.json();
+    const html = await res.text();
 
-    const results = data.response && data.response.results;
-    if (!results || !results.length) return null;
+    // Strategy 1: Parse __NEXT_DATA__ for rich product data
+    const nextDataMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (nextDataMatch) {
+      try {
+        const nextData = JSON.parse(nextDataMatch[1]);
+        // Navigate to search results
+        const mainContent = nextData.props && nextData.props.pageProps &&
+          nextData.props.pageProps.initialData && nextData.props.pageProps.initialData.mainContent;
+        const records = mainContent && mainContent.records;
+        if (records && records.length > 0) {
+          const r = records[0];
+          const meta = r.allMeta || r.attributes || r;
+          const variants = meta.variants || [];
+          let price = 0, listPrice = 0, image = '';
+          if (variants.length > 0) {
+            const v = variants[0];
+            const prices = v.prices || {};
+            price = prices.promoPrice || prices.salePrice || prices.listPrice || 0;
+            listPrice = prices.listPrice || price;
+            image = v.largeImage || v.smallImage || '';
+          }
+          const name = meta.title || '';
+          const productUrl = meta.productId ? `https://www.liverpool.com.mx/tienda/pdp/${meta.productId}` : '';
+          if (price > 0) {
+            return {
+              store: 'Liverpool',
+              name: name,
+              price: price,
+              listPrice: listPrice,
+              url: productUrl,
+              image: image
+            };
+          }
+        }
+      } catch (e) {}
+    }
 
-    const item = results[0];
-    const meta = item.data || {};
+    // Strategy 2: JSON-LD fallback
+    const $ = cheerio.load(html);
+    let price = 0, name = '', productUrl = '', image = '', listPrice = 0;
+    $('script[type="application/ld+json"]').each((i, el) => {
+      try {
+        const json = JSON.parse($(el).html());
+        if (json['@type'] === 'Product' || (json.itemListElement && json.itemListElement[0])) {
+          const item = json['@type'] === 'Product' ? json : json.itemListElement[0].item;
+          if (item) {
+            name = item.name || '';
+            const offer = item.offers || {};
+            price = parseFloat(offer.price || offer.lowPrice) || 0;
+            listPrice = parseFloat(offer.highPrice || offer.price) || 0;
+            image = item.image || '';
+            productUrl = item.url || '';
+          }
+        }
+      } catch (e) {}
+    });
 
-    return {
-      store: 'Palacio de Hierro',
-      name: item.value || meta.product_name || '',
-      price: meta.price || 0,
-      listPrice: meta.listPrice || meta.price || 0,
-      url: meta.url ? (meta.url.startsWith('http') ? meta.url : `https://www.elpalaciodehierro.com${meta.url}`) : '',
-      image: meta.image_url || (meta.images && meta.images[0]) || ''
-    };
+    if (!price) return null;
+    return { store: 'Liverpool', name, price, listPrice: listPrice || price, url: productUrl, image };
   } catch (e) {
-    return { store: 'Palacio de Hierro', error: e.message };
+    return { store: 'Liverpool', error: e.message };
   }
 }
 
-// 3. NIKE MX — api.nike.com
+// 4. NIKE MX — api.nike.com
 async function searchNike(query) {
   try {
-    const endpoint = `/product_feed/rollup_threads/v2?filter=marketplace(MX)&filter=language(es)&filter=channelId(d9a5bc42-4b9c-4976-858a-f159cf99c647)&filter=searchTerms(${encodeURIComponent(query)})&anchor=0&count=3&consumerChannelId=d9a5bc42-4b9c-4976-858a-f159cf99c647`;
+    const endpoint = `/product_feed/rollup_threads/v2?filter=marketplace(MX)&filter=language(es)&filter=channelId(d9a5bc42-4b9c-4976-858a-f159cf99c647)&filter=searchTerms(${encodeURIComponent(query)})&anchor=0&count=5&consumerChannelId=d9a5bc42-4b9c-4976-858a-f159cf99c647`;
     const url = `https://api.nike.com/cic/browse/v2?queryid=products&anonymousId=trackinn&country=mx&language=es&endpoint=${encodeURIComponent(endpoint)}`;
     const res = await fetch(url, {
       headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
@@ -115,226 +197,8 @@ async function searchNike(query) {
   }
 }
 
-// 4. LIVERPOOL — scrape search page
-async function searchLiverpool(query) {
-  try {
-    const url = `https://www.liverpool.com.mx/tienda/buscar?s=${encodeURIComponent(query)}`;
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'es-MX,es;q=0.9'
-      }
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-    const $ = cheerio.load(html);
-
-    // Try JSON-LD
-    let price = 0, name = '', productUrl = '', image = '', listPrice = 0;
-    $('script[type="application/ld+json"]').each((i, el) => {
-      try {
-        const json = JSON.parse($(el).html());
-        if (json['@type'] === 'Product' || (json.itemListElement && json.itemListElement[0])) {
-          const item = json['@type'] === 'Product' ? json : json.itemListElement && json.itemListElement[0] && json.itemListElement[0].item;
-          if (item) {
-            name = item.name || '';
-            const offer = item.offers || (item.offers && item.offers[0]);
-            if (offer) {
-              price = parseFloat(offer.price || offer.lowPrice) || 0;
-              listPrice = parseFloat(offer.highPrice || offer.price) || 0;
-            }
-            image = item.image || '';
-            productUrl = item.url || '';
-          }
-        }
-      } catch (e) {}
-    });
-
-    // Fallback: try meta tags or product cards
-    if (!price) {
-      const card = $('[data-price], .product-card, .plp-card').first();
-      const priceText = card.find('[class*="price"], [class*="Price"]').first().text();
-      const match = priceText && priceText.match(/[\d,]+\.?\d*/);
-      if (match) price = parseFloat(match[0].replace(/,/g, ''));
-      name = name || card.find('[class*="name"], [class*="title"]').first().text().trim();
-    }
-
-    if (!price) return null;
-
-    return {
-      store: 'Liverpool',
-      name: name,
-      price: price,
-      listPrice: listPrice || price,
-      url: productUrl || url,
-      image: image
-    };
-  } catch (e) {
-    return { store: 'Liverpool', error: e.message };
-  }
-}
-
-// 5. AMAZON MX — scrape search page
-async function searchAmazon(query) {
-  try {
-    const url = `https://www.amazon.com.mx/s?k=${encodeURIComponent(query)}`;
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'es-MX,es;q=0.9'
-      }
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-    const $ = cheerio.load(html);
-
-    const result = $('[data-component-type="s-search-result"]').first();
-    if (!result.length) return null;
-
-    const priceWhole = result.find('.a-price .a-price-whole').first().text().replace(/[,.\s]/g, '');
-    const priceFraction = result.find('.a-price .a-price-fraction').first().text() || '00';
-    const price = parseFloat(priceWhole + '.' + priceFraction) || 0;
-    const name = result.find('h2 a span, h2 span').first().text().trim();
-    const link = result.find('h2 a').first().attr('href');
-    const img = result.find('img.s-image').first().attr('src');
-
-    // Original price (strikethrough)
-    const origText = result.find('.a-price.a-text-price .a-offscreen').first().text();
-    const origMatch = origText && origText.match(/[\d,]+\.?\d*/);
-    const listPrice = origMatch ? parseFloat(origMatch[0].replace(/,/g, '')) : price;
-
-    if (!price) return null;
-
-    return {
-      store: 'Amazon',
-      name: name,
-      price: price,
-      listPrice: listPrice,
-      url: link ? `https://www.amazon.com.mx${link}` : url,
-      image: img || ''
-    };
-  } catch (e) {
-    return { store: 'Amazon', error: e.message };
-  }
-}
-
-// 6. ADIDAS MX — scrape search page
-async function searchAdidas(query) {
-  try {
-    const url = `https://www.adidas.mx/search?q=${encodeURIComponent(query)}`;
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'es-MX,es;q=0.9'
-      }
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-    const $ = cheerio.load(html);
-
-    // Try JSON-LD
-    let price = 0, name = '', productUrl = '', image = '', listPrice = 0;
-    $('script[type="application/ld+json"]').each((i, el) => {
-      try {
-        const json = JSON.parse($(el).html());
-        const items = json.itemListElement || json['@graph'];
-        if (items && items[0]) {
-          const item = items[0].item || items[0];
-          name = item.name || '';
-          const offer = item.offers || {};
-          price = parseFloat(offer.price || offer.lowPrice) || 0;
-          listPrice = parseFloat(offer.highPrice || offer.price) || 0;
-          image = item.image || '';
-          productUrl = item.url || '';
-        }
-      } catch (e) {}
-    });
-
-    // Fallback: product card
-    if (!price) {
-      const card = $('[class*="product-card"], [class*="plp-card"]').first();
-      const priceText = card.find('[class*="price"]').first().text();
-      const match = priceText && priceText.match(/[\d,]+\.?\d*/);
-      if (match) price = parseFloat(match[0].replace(/,/g, ''));
-      name = name || card.find('[class*="name"], [class*="title"]').first().text().trim();
-    }
-
-    if (!price) return null;
-
-    return {
-      store: 'Adidas',
-      name: name,
-      price: price,
-      listPrice: listPrice || price,
-      url: productUrl || url,
-      image: image
-    };
-  } catch (e) {
-    return { store: 'Adidas', error: e.message };
-  }
-}
-
-// 7. DEPORTENIS — scrape search page
-async function searchDeportenis(query) {
-  try {
-    const url = `https://www.dportenis.mx/search?q=${encodeURIComponent(query)}`;
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'es-MX,es;q=0.9'
-      }
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-    const $ = cheerio.load(html);
-
-    // Try JSON-LD
-    let price = 0, name = '', productUrl = '', image = '', listPrice = 0;
-    $('script[type="application/ld+json"]').each((i, el) => {
-      try {
-        const json = JSON.parse($(el).html());
-        if (json['@type'] === 'Product') {
-          name = json.name || '';
-          const offer = json.offers || {};
-          price = parseFloat(offer.price || offer.lowPrice) || 0;
-          listPrice = parseFloat(offer.highPrice || offer.price) || 0;
-          image = json.image || '';
-          productUrl = json.url || '';
-        }
-      } catch (e) {}
-    });
-
-    // Fallback: product card
-    if (!price) {
-      const card = $('[class*="product"], [class*="card"]').first();
-      const priceText = card.find('[class*="price"]').first().text();
-      const match = priceText && priceText.match(/[\d,]+\.?\d*/);
-      if (match) price = parseFloat(match[0].replace(/,/g, ''));
-      name = name || card.find('[class*="name"], [class*="title"]').first().text().trim();
-    }
-
-    if (!price) return null;
-
-    return {
-      store: 'Deportenis',
-      name: name,
-      price: price,
-      listPrice: listPrice || price,
-      url: productUrl || url,
-      image: image
-    };
-  } catch (e) {
-    return { store: 'Deportenis', error: e.message };
-  }
-}
-
 // ============ MAIN HANDLER ============
 module.exports = async function handler(req, res) {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -342,31 +206,27 @@ module.exports = async function handler(req, res) {
     return res.status(200).end();
   }
 
-  const { q, estilo, name } = req.query;
-  // name = "NIKE TENIS AIR MAX 90", estilo = "DZ5361"
-  // For brand-specific stores (Nike, Adidas), estilo might work
-  // For general stores, use name (brand + description)
+  const { q, estilo, name, brand } = req.query;
   const searchName = name || q || '';
   const searchEstilo = estilo || '';
+  const searchBrand = (brand || '').toLowerCase();
 
   if (!searchName && !searchEstilo) {
     return res.status(400).json({ error: 'Falta parametro: ?name=marca+producto o ?estilo=ABC123' });
   }
 
-  // Extract brand from name for validation
-  const brand = searchName ? searchName.toLowerCase().split(/\s+/)[0] : '';
-
-  // Get significant words from search name for validation
+  // Build smart search queries
+  const estiloBase = searchEstilo ? searchEstilo.split('-')[0] : '';
   const nameWords = searchName ? searchName.toLowerCase().split(/\s+/).filter(w => w.length >= 3) : [];
 
-  // Validate that a result matches by name (brand + at least one keyword)
-  function isRelevantByName(result) {
+  // Validate result relevance
+  function isRelevant(result) {
     if (!result || !result.name || !nameWords.length) return true;
     const rn = result.name.toLowerCase();
     // Must contain brand
-    if (brand && brand.length > 2 && !rn.includes(brand)) return false;
-    // Must contain at least one other keyword besides brand
-    const otherWords = nameWords.filter(w => w !== brand);
+    if (searchBrand && searchBrand.length > 2 && !rn.includes(searchBrand)) return false;
+    // Must contain at least one keyword
+    const otherWords = nameWords.filter(w => w !== searchBrand);
     if (otherWords.length > 0) {
       const matchCount = otherWords.filter(w => rn.includes(w)).length;
       if (matchCount === 0) return false;
@@ -374,24 +234,23 @@ module.exports = async function handler(req, res) {
     return true;
   }
 
-  // All stores search by estilo first, fallback to name
-  async function searchWithFallback(searchFn, estiloQ, nameQ) {
+  // Search with estilo first, then name fallback
+  async function searchWithFallback(searchFn, storeName) {
     try {
-      if (estiloQ) {
-        const result = await searchFn(estiloQ);
-        if (result && result.price > 0 && !result.error) {
-          // Validate: result name must contain the estilo code (exact match)
-          const rName = (result.name || '').toLowerCase();
-          const estiloClean = estiloQ.replace(/\s/g, '').toLowerCase();
-          const estiloBase = estiloQ.split('-')[0].toLowerCase().trim();
-          if (rName.includes(estiloClean) || rName.includes(estiloQ.toLowerCase()) || rName.includes(estiloBase)) {
-            return result;
-          }
-        }
+      // Try estilo first
+      if (searchEstilo) {
+        const result = await searchFn(searchEstilo);
+        if (result && result.price > 0 && !result.error) return result;
       }
-      if (nameQ && nameQ !== estiloQ) {
-        const result = await searchFn(nameQ);
-        if (result && result.price > 0 && !result.error && isRelevantByName(result)) return result;
+      // Try estilo base (without color code)
+      if (estiloBase && estiloBase !== searchEstilo) {
+        const result = await searchFn(estiloBase);
+        if (result && result.price > 0 && !result.error && isRelevant(result)) return result;
+      }
+      // Try name
+      if (searchName) {
+        const result = await searchFn(searchName);
+        if (result && result.price > 0 && !result.error && isRelevant(result)) return result;
       }
       return null;
     } catch (e) {
@@ -399,27 +258,26 @@ module.exports = async function handler(req, res) {
     }
   }
 
-  // Search all stores in parallel — estilo first, then name as fallback
+  // Search all 4 stores in parallel
   const results = await Promise.allSettled([
-    searchWithFallback(searchMarti, searchEstilo, searchName),
-    searchWithFallback(searchPalacio, searchEstilo, searchName),
-    searchWithFallback(searchNike, searchEstilo, searchName),
-    searchWithFallback(searchLiverpool, searchEstilo, searchName),
-    searchWithFallback(searchAmazon, searchEstilo, searchName),
-    searchWithFallback(searchAdidas, searchEstilo, searchName),
-    searchWithFallback(searchDeportenis, searchEstilo, searchName)
+    searchWithFallback(searchDportenis, 'Dportenis'),
+    searchWithFallback(searchMarti, 'Martí'),
+    searchWithFallback(searchLiverpool, 'Liverpool'),
+    searchWithFallback(searchNike, 'Nike')
   ]);
 
   const prices = results
     .map(r => r.status === 'fulfilled' ? r.value : null)
-    .filter(Boolean);
+    .filter(r => r && r.price > 0 && !r.error);
 
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
   return res.status(200).json({
     query: searchName,
     estilo: searchEstilo,
+    brand: searchBrand,
     timestamp: new Date().toISOString(),
+    count: prices.length,
     results: prices
   });
 };
