@@ -23,14 +23,29 @@ module.exports = async function handler(req, res) {
     if (nextDataMatch) {
       try {
         const nd = JSON.parse(nextDataMatch[1]);
-        const mc = nd.props && nd.props.pageProps && nd.props.pageProps.initialData && nd.props.pageProps.initialData.mainContent;
+        // Explore the structure to find where products are
+        const pp = nd.props && nd.props.pageProps;
+        const keys1 = pp ? Object.keys(pp) : [];
+        const id = pp && pp.initialData;
+        const keys2 = id ? Object.keys(id) : [];
+        const mc = id && id.mainContent;
+        const keys3 = mc ? Object.keys(mc) : [];
         const records = mc && mc.records;
         recordCount = records ? records.length : 0;
-        if (records && records[0]) {
-          const meta = records[0].allMeta || records[0];
-          firstTitle = meta.title || 'N/A';
-          variantTitles = (meta.variants || []).slice(0, 3).map(v => v.title || 'N/A');
-        }
+
+        // Also try alternative paths
+        let altProducts = [];
+        // Check if products are in a different location
+        const str = JSON.stringify(nd).substring(0, 5000);
+        const productIds = (str.match(/"productId":"(\d+)"/g) || []).slice(0, 5);
+
+        firstTitle = JSON.stringify({
+          pagePropsKeys: keys1,
+          initialDataKeys: keys2,
+          mainContentKeys: keys3,
+          recordCount,
+          productIdsFound: productIds,
+        });
       } catch (e) {
         firstTitle = 'PARSE_ERROR: ' + e.message;
       }
