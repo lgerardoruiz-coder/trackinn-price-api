@@ -159,8 +159,10 @@ async function searchLiverpool(query, estilo) {
     if (nextDataMatch) {
       try {
         const nextData = JSON.parse(nextDataMatch[1]);
-        const mainContent = nextData.props && nextData.props.pageProps &&
-          nextData.props.pageProps.initialData && nextData.props.pageProps.initialData.mainContent;
+        // Liverpool changed structure: try new path first, then old path
+        const mainContent =
+          (nextData.query && nextData.query.data && nextData.query.data.mainContent) ||
+          (nextData.props && nextData.props.pageProps && nextData.props.pageProps.initialData && nextData.props.pageProps.initialData.mainContent);
         const records = mainContent && mainContent.records;
         if (records && records.length > 0) {
           // Search through ALL records for a match, not just the first one
