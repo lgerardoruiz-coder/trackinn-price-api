@@ -23,28 +23,35 @@ module.exports = async function handler(req, res) {
     if (nextDataMatch) {
       try {
         const nd = JSON.parse(nextDataMatch[1]);
-        // Explore the structure to find where products are
         const pp = nd.props && nd.props.pageProps;
-        const keys1 = pp ? Object.keys(pp) : [];
-        const id = pp && pp.initialData;
-        const keys2 = id ? Object.keys(id) : [];
-        const mc = id && id.mainContent;
-        const keys3 = mc ? Object.keys(mc) : [];
-        const records = mc && mc.records;
-        recordCount = records ? records.length : 0;
+        const data = pp && pp.data;
+        const dataKeys = data ? Object.keys(data) : [];
 
-        // Also try alternative paths
-        let altProducts = [];
-        // Check if products are in a different location
-        const str = JSON.stringify(nd).substring(0, 5000);
-        const productIds = (str.match(/"productId":"(\d+)"/g) || []).slice(0, 5);
+        // Explore data structure deeper
+        let dataInfo = {};
+        if (data) {
+          for (const key of dataKeys.slice(0, 10)) {
+            const val = data[key];
+            if (val && typeof val === 'object') {
+              dataInfo[key] = { type: Array.isArray(val) ? 'array(' + val.length + ')' : 'object', keys: Object.keys(val).slice(0, 10) };
+            } else {
+              dataInfo[key] = typeof val;
+            }
+          }
+        }
+
+        // Search for product data in the full JSON (look for price-related keywords)
+        const fullStr = JSON.stringify(nd);
+        const priceMatches = (fullStr.match(/"(promoPrice|listPrice|salePrice|currentPrice)"/g) || []).slice(0, 5);
+        const titleMatches = (fullStr.match(/"title":"[^"]{5,50}"/g) || []).slice(0, 5);
 
         firstTitle = JSON.stringify({
-          pagePropsKeys: keys1,
-          initialDataKeys: keys2,
-          mainContentKeys: keys3,
-          recordCount,
-          productIdsFound: productIds,
+          pagePropsKeys: pp ? Object.keys(pp) : [],
+          dataKeys,
+          dataInfo,
+          priceFieldsFound: priceMatches,
+          titleFieldsFound: titleMatches,
+          fullJsonLength: fullStr.length,
         });
       } catch (e) {
         firstTitle = 'PARSE_ERROR: ' + e.message;
