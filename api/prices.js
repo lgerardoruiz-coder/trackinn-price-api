@@ -72,7 +72,7 @@ async function searchDportenis(query, estilo) {
 // Validates via `productReference` field which contains manufacturer style code
 async function searchMarti(query, estilo) {
   try {
-    const url = `https://www.marti.mx/api/io/_v/api/intelligent-search/product_search/${encodeURIComponent(query)}?page=1&count=10&locale=es-MX`;
+    const url = `https://www.marti.mx/api/io/_v/api/intelligent-search/product_search/?query=${encodeURIComponent(query)}&page=1&count=10&locale=es-MX`;
     const res = await fetch(url, {
       headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
     });
@@ -166,7 +166,8 @@ async function searchLiverpool(query, estilo) {
           // Search through ALL records for a match, not just the first one
           for (const r of records) {
             const meta = r.allMeta || r.attributes || r;
-            // Check if estilo appears in title, sku, model, or any identifier field
+            // Check if estilo appears in title, sku, model, variant titles, or any identifier field
+            const variantTitles = (meta.variants || []).map(v => v.title || '').join(' ');
             const searchFields = [
               meta.title || '',
               meta.sku || '',
@@ -174,6 +175,7 @@ async function searchLiverpool(query, estilo) {
               meta.productId || '',
               meta.manufacturer_style || '',
               meta.partNumber || '',
+              variantTitles,
               JSON.stringify(meta.child_sku_ids || '')
             ].join(' ').toUpperCase();
 
@@ -238,46 +240,85 @@ async function searchLiverpool(query, estilo) {
   }
 }
 
-// 4. NIKE MX — api.nike.com
-// Validates via `styleColor` field which is the manufacturer style code
+// 4. NIKE MX — nike.com.mx search page scraping
+// Validates via product title/URL containing the estilo
 async function searchNike(query, estilo) {
   try {
-    const endpoint = `/product_feed/rollup_threads/v2?filter=marketplace(MX)&filter=language(es)&filter=channelId(d9a5bc42-4b9c-4976-858a-f159cf99c647)&filter=searchTerms(${encodeURIComponent(query)})&anchor=0&count=10&consumerChannelId=d9a5bc42-4b9c-4976-858a-f159cf99c647`;
-    const url = `https://api.nike.com/cic/browse/v2?queryid=products&anonymousId=trackinn&country=mx&language=es&endpoint=${encodeURIComponent(endpoint)}`;
-    const res = await fetch(url, {
-      headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' }
+    // Try the product detail page directly by style code
+    const styleForUrl = (estilo || query).toUpperCase();
+    const searchUrl = `https://www.nike.com/mx/w?q=${encodeURIComponent(query)}`;
+    const res = await fetch(searchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'es-MX,es;q=0.9'
+      }
     });
     if (!res.ok) return null;
-    const data = await res.json();
+    const html = await res.text();
 
-    const products = data.data && data.data.products && data.data.products.products;
-    if (!products || !products.length) return null;
-
-    // Find the product whose styleColor matches our estilo
+    // Look for JSON-LD product data
+    const $ = cheerio.load(html);
     let matched = null;
-    for (const p of products) {
-      const styleColor = (p.styleColor || '').toUpperCase();
-      const productCode = (p.productCode || '').toUpperCase();
-      if (estilo && (estiloMatches(estilo, styleColor) || estiloMatches(estilo, productCode))) {
-        matched = p;
-        break;
+    $('script[type="application/ld+json"]').each((i, el) => {
+      if (matched) return;
+      try {
+        const json = JSON.parse($(el).html());
+        const items = json['@type'] === 'ItemList' ? (json.itemListElement || []) : [json];
+        for (const entry of items) {
+          const item = entry.item || entry;
+          if (item['@type'] !== 'Product') continue;
+          const fields = [item.name || '', item.sku || '', item.model || '', item.mpn || '', item.url || ''].join(' ').toUpperCase();
+          if (estilo && estiloMatches(estilo, fields)) {
+            const offer = item.offers || {};
+            const price = parseFloat(offer.price || offer.lowPrice) || 0;
+            if (price > 0) {
+              matched = {
+                store: 'Nike',
+                name: item.name || '',
+                price: price,
+                listPrice: parseFloat(offer.highPrice || offer.price) || price,
+                url: item.url || searchUrl,
+                image: (typeof item.image === 'string' ? item.image : (item.image && item.image[0])) || ''
+              };
+            }
+          }
+        }
+      } catch (e) {}
+    });
+
+    // Fallback: search in __NEXT_DATA__ if present
+    if (!matched) {
+      const nextMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+      if (nextMatch) {
+        try {
+          const nd = JSON.parse(nextMatch[1]);
+          // Try to find products in the data structure
+          const str = JSON.stringify(nd);
+          // Check if our estilo appears anywhere in the data
+          if (estilo && str.toUpperCase().includes(estilo.toUpperCase().split('-')[0])) {
+            // Extract price and product info from nearby context
+            const priceMatch = str.match(/"currentPrice":(\d+\.?\d*)/);
+            const titleMatch = str.match(/"title":"([^"]+)"/);
+            const urlMatch = str.match(/"pdpUrl":"([^"]+)"/);
+            const imgMatch = str.match(/"squarishURL":"([^"]+)"/);
+            const styleMatch = str.match(/"styleColor":"([^"]+)"/);
+            if (priceMatch && styleMatch && estilo && estiloMatches(estilo, styleMatch[1])) {
+              matched = {
+                store: 'Nike',
+                name: titleMatch ? titleMatch[1] : '',
+                price: parseFloat(priceMatch[1]) || 0,
+                listPrice: parseFloat((str.match(/"fullPrice":(\d+\.?\d*)/) || [])[1]) || parseFloat(priceMatch[1]) || 0,
+                url: urlMatch ? `https://www.nike.com/mx${urlMatch[1]}` : searchUrl,
+                image: imgMatch ? imgMatch[1] : ''
+              };
+            }
+          }
+        } catch (e) {}
       }
     }
-    // No match found — don't return a random product
-    if (!matched) return null;
 
-    const p = matched;
-    const price = p.price && p.price.currentPrice;
-    const listPrice = p.price && (p.price.fullPrice || p.price.currentPrice);
-
-    return {
-      store: 'Nike',
-      name: p.title || '',
-      price: price || 0,
-      listPrice: listPrice || 0,
-      url: p.url ? `https://www.nike.com.mx${p.url}` : '',
-      image: p.images && p.images.squarishURL || ''
-    };
+    return matched;
   } catch (e) {
     return null;
   }
