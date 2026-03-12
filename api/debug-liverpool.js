@@ -23,27 +23,33 @@ module.exports = async function handler(req, res) {
     if (nextDataMatch) {
       try {
         const nd = JSON.parse(nextDataMatch[1]);
-        const fullStr = JSON.stringify(nd);
 
-        // Find the path to products by looking for promoPrice context
-        // Extract a chunk around the first promoPrice to see the structure
-        const idx = fullStr.indexOf('"promoPrice"');
-        const chunk = idx >= 0 ? fullStr.substring(Math.max(0, idx - 500), idx + 200) : 'NOT_FOUND';
-
-        // Try to find records/products array
-        const recordsIdx = fullStr.indexOf('"records"');
-        const recordsChunk = recordsIdx >= 0 ? fullStr.substring(recordsIdx, recordsIdx + 200) : 'NOT_FOUND';
-
-        // Try body structure
-        const pp = nd.props && nd.props.pageProps;
-        const body = pp && pp.body;
-        const bodyType = body ? (typeof body === 'string' ? 'string(' + body.length + ')' : (Array.isArray(body) ? 'array(' + body.length + ')' : 'object:' + Object.keys(body).slice(0,5).join(','))) : 'null';
-
-        firstTitle = JSON.stringify({
-          bodyType,
-          priceContext: chunk.substring(0, 500),
-          recordsContext: recordsChunk.substring(0, 300),
-        });
+        // Deep search: find all objects that have both title and prices
+        function findProducts(obj, path, results, depth) {
+          if (depth > 15 || results.length >= 3) return;
+          if (!obj || typeof obj !== 'object') return;
+          // Check if this object looks like a product (has title and price info)
+          if (obj.title && (obj.prices || obj.promoPrice !== undefined || obj.listPrice !== undefined)) {
+            results.push({ path, title: obj.title, prices: obj.prices || { promo: obj.promoPrice, list: obj.listPrice } });
+            return;
+          }
+          if (obj.allMeta && obj.allMeta.title) {
+            results.push({ path: path + '.allMeta', title: obj.allMeta.title });
+            return;
+          }
+          if (Array.isArray(obj)) {
+            for (let i = 0; i < Math.min(obj.length, 5); i++) {
+              findProducts(obj[i], path + '[' + i + ']', results, depth + 1);
+            }
+          } else {
+            for (const key of Object.keys(obj).slice(0, 20)) {
+              findProducts(obj[key], path + '.' + key, results, depth + 1);
+            }
+          }
+        }
+        const products = [];
+        findProducts(nd, 'root', products, 0);
+        firstTitle = JSON.stringify({ productsFound: products.length, products: products.slice(0, 3) });
       } catch (e) {
         firstTitle = 'PARSE_ERROR: ' + e.message;
       }
